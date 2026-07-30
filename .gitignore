@@ -1,0 +1,57 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Secrets and credentials
+*.pem
+*.key
+credentials.json
+serviceAccount*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+venv/
+env/
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Builds
+dist/
+build/
+.vite/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Databases
+*.sqlite3
+*.sqlite
+*.db
+
+# Generated artefacts
+backend/storage/
+*.h5
+*.pt
+*.pkl
+*.ckpt
+*.parquet
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
