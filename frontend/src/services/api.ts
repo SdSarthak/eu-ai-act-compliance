@@ -31,13 +31,23 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 errors
+// Requests that legitimately answer 401 to an anonymous caller. Redirecting on
+// these reloads the page before the form can render the error, so a wrong
+// password looked like nothing had happened at all.
+const PUBLIC_ENDPOINTS = ['/auth/login', '/auth/register']
+
+// Handle 401 errors: an expired session sends the user back to the login page,
+// but a failed sign-in attempt is handed to the caller to display.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const url = error.config?.url ?? ''
+    const isPublic = PUBLIC_ENDPOINTS.some((endpoint) => url.startsWith(endpoint))
+    if (error.response?.status === 401 && !isPublic) {
       useAuthStore.getState().logout()
-      window.location.href = '/login'
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }
