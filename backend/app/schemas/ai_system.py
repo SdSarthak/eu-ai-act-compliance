@@ -1,10 +1,14 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from app.models.ai_system import RiskLevel, ComplianceStatus
 
 
 class AISystemCreate(BaseModel):
+    # Without stripping, ``"   "`` satisfies min_length and registers a system
+    # with a blank name that the UI cannot show.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: str = Field(min_length=1, max_length=255)
     description: Optional[str] = None
     version: Optional[str] = Field(default=None, max_length=50)
@@ -13,6 +17,8 @@ class AISystemCreate(BaseModel):
 
 
 class AISystemUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     version: Optional[str] = Field(default=None, max_length=50)
@@ -52,8 +58,11 @@ class RiskClassificationRequest(BaseModel):
     the provision that makes them relevant.
     """
 
-    # Basic use case
-    use_case_category: str = "other"  # "hr_recruitment", "credit_scoring", ...
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # Basic use case. Persisted verbatim into ``questionnaire_responses``, so it
+    # is bounded to keep an unbounded request body out of the database.
+    use_case_category: str = Field(default="other", max_length=100)
 
     # Prohibited practices (Article 5)
     social_scoring: bool = False
