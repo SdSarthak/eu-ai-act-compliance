@@ -289,11 +289,36 @@ def verify_webhook(payload: bytes, signature: Optional[str]) -> dict:
         )
 
 
+# SQLite and a 64-bit BIGINT both stop here; anything larger is not a row id.
+_MAX_ROW_ID = 2 ** 63 - 1
+
+
+def _coerce_user_id(raw: object) -> Optional[int]:
+    """Read a user id out of Stripe metadata without trusting its shape.
+
+    Metadata is free-form text that Stripe echoes back verbatim, so a stale or
+    hand-edited value can be non-numeric or absurdly large. Both used to raise
+    (``ValueError`` / ``OverflowError``) out of the webhook handler as a 500,
+    which makes Stripe retry an event that can never succeed.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value <= 0 or value > _MAX_ROW_ID:
+        return None
+    return value
+
+
 def _user_for_event(db: Session, obj: dict) -> Optional[User]:
     metadata = obj.get("metadata") or {}
-    user_id = metadata.get("user_id") or obj.get("client_reference_id")
-    if user_id:
-        user = db.query(User).filter(User.id == int(user_id)).first()
+    user_id = _coerce_user_id(
+        metadata.get("user_id") or obj.get("client_reference_id")
+    )
+    if user_id is not None:
+        user = db.query(User).filter(User.id == user_id).first()
         if user:
             return user
 
@@ -328,7 +353,11 @@ def apply_webhook_event(db: Session, event: dict) -> dict:
     event types are acknowledged and ignored, which is what Stripe expects.
     """
     event_type = event.get("type", "")
-    obj = (event.get("data") or {}).get("object") or {}
+    data = event.get("data") or {}
+    obj = (data.get("object") if isinstance(data, dict) else None) or {}
+    if not isinstance(obj, dict):
+        # A malformed payload must be acknowledged, not crash the endpoint.
+        return {"handled": False, "reason": "malformed event payload"}
 
     if event_type == "checkout.session.completed":
         user = _user_for_event(db, obj)
