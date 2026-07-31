@@ -1,3 +1,5 @@
+import logging
+import re
 from pathlib import Path as FilePath
 from typing import List, Optional
 
@@ -20,7 +22,18 @@ from app.schemas.document import (
 from app.services import billing
 from app.services import documents as document_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# Path separators, control characters and the Windows-reserved set. Titles are
+# user-supplied, so they never reach the Content-Disposition header unfiltered.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+
+
+def _safe_filename(title: str) -> str:
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("-", title).strip(" .")
+    return cleaned[:120] or "document"
 
 
 @router.get("/templates")
@@ -104,8 +117,10 @@ def update_document(
         setattr(document, field, value)
 
     if "content" in update_data:
-        # The stored PDF no longer matches the content; drop it so the next
-        # export regenerates from scratch.
+        # The stored PDF no longer matches the content; remove it from disk and
+        # clear the path so the next export regenerates from scratch. Without
+        # the unlink every edit orphaned a file in the storage directory.
+        document_service.remove_pdf(document.file_path)
         document.file_path = None
 
     db.commit()
@@ -195,11 +210,21 @@ def download_document_pdf(
 
     path = FilePath(document.file_path) if document.file_path else None
     if path is None or not path.exists():
-        document.file_path = document_service.export_pdf(document)
+        try:
+            document.file_path = document_service.export_pdf(document)
+        except Exception:
+            # Never leave a path pointing at a file the render did not produce.
+            document.file_path = None
+            db.commit()
+            logger.exception("PDF export failed for document %s", document.id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The document could not be rendered to PDF.",
+            )
         db.commit()
         path = FilePath(document.file_path)
 
-    filename = f"{document.title.replace('/', '-')}.pdf"
+    filename = f"{_safe_filename(document.title)}.pdf"
     return FileResponse(path, media_type="application/pdf", filename=filename)
 
 
@@ -209,8 +234,6 @@ def delete_document(
     db: Session = Depends(get_db),
 ):
     """Delete a document and any PDF rendered from it."""
-    if document.file_path:
-        FilePath(document.file_path).unlink(missing_ok=True)
-
+    document_service.remove_pdf(document.file_path)
     db.delete(document)
     db.commit()

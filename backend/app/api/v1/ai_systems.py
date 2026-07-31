@@ -15,6 +15,7 @@ from app.schemas.ai_system import (
     AISystemResponse,
 )
 from app.services import billing, compliance
+from app.services import documents as documents_service
 
 router = APIRouter()
 
@@ -97,8 +98,15 @@ def delete_ai_system(
     db: Session = Depends(get_db),
 ):
     """Delete an AI system along with its assessments, checklist and documents."""
+    # The document rows cascade, but their rendered PDFs are not in the
+    # database and would otherwise stay in the storage directory forever.
+    stale_pdfs = [document.file_path for document in system.documents]
+
     db.delete(system)
     db.commit()
+
+    for file_path in stale_pdfs:
+        documents_service.remove_pdf(file_path)
 
 
 @router.post("/{system_id}/recalculate", response_model=AISystemDetailResponse)

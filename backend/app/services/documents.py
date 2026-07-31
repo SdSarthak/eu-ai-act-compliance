@@ -7,7 +7,10 @@ checklist - so a generated document reflects what the user has actually done.
 """
 
 import html
+import logging
+import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from string import Template
@@ -32,6 +35,8 @@ from app.models.ai_system import AISystem, RiskLevel
 from app.models.compliance import ComplianceItem, ItemStatus
 from app.models.document import Document, DocumentType
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 RISK_LEVEL_LABELS = {
     RiskLevel.UNACCEPTABLE: "Unacceptable (prohibited under Article 5)",
@@ -656,32 +661,80 @@ def markdown_to_story(content: str, styles) -> List:
     return story
 
 
+def _pdf_filename(document: Document) -> str:
+    """A filesystem-safe name derived only from server-controlled fields."""
+    version = re.sub(r"[^A-Za-z0-9._-]", "_", str(document.version or "1.0"))
+    return f"document-{document.id}-v{version}.pdf"
+
+
 def export_pdf(document: Document, output_dir: Optional[str] = None) -> str:
-    """Render a document to PDF and return the file path."""
+    """Render a document to PDF and return the file path.
+
+    The PDF is built into a sibling temporary file and moved into place, so a
+    reader downloading the previous export never sees a half-written file and a
+    failed build never leaves a truncated PDF behind for the next download to
+    serve.
+    """
     target_dir = Path(output_dir or settings.DOCUMENT_STORAGE_DIR)
     target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / f"document-{document.id}-v{document.version}.pdf"
+    path = target_dir / _pdf_filename(document)
 
-    styles = _styles()
-    pdf = SimpleDocTemplate(
-        str(path),
-        pagesize=A4,
-        title=document.title,
-        author="EU AI Act Compliance Tool",
-        leftMargin=20 * mm,
-        rightMargin=20 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
+    handle, temp_name = tempfile.mkstemp(
+        dir=str(target_dir), prefix=f".{path.stem}-", suffix=".part"
     )
-    story = markdown_to_story(document.content or "", styles)
-    pdf.build(story)
+    os.close(handle)
+    temp_path = Path(temp_name)
+
+    try:
+        pdf = SimpleDocTemplate(
+            str(temp_path),
+            pagesize=A4,
+            title=document.title,
+            author="EU AI Act Compliance Tool",
+            leftMargin=20 * mm,
+            rightMargin=20 * mm,
+            topMargin=18 * mm,
+            bottomMargin=18 * mm,
+        )
+        pdf.build(markdown_to_story(document.content or "", _styles()))
+        os.replace(temp_path, path)
+    except OSError:
+        # On Windows the replace fails while another request has the target
+        # open. A concurrent export produced the same bytes, so keep that one.
+        _unlink_quietly(temp_path)
+        if not path.exists():
+            raise
+    except Exception:
+        _unlink_quietly(temp_path)
+        raise
+
     return str(path)
+
+
+def _unlink_quietly(path: Path) -> None:
+    """Best-effort delete: a leftover temp file must not mask the real error."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - platform dependent
+        logger.warning("Could not remove %s", path)
+
+
+def remove_pdf(file_path: Optional[str]) -> None:
+    """Drop a rendered PDF, tolerating one that is already gone or locked.
+
+    A stale or unreadable file on disk must never stop the database row from
+    being deleted, so this never raises.
+    """
+    if not file_path:
+        return
+    _unlink_quietly(Path(file_path))
 
 
 __all__ = [
     "TEMPLATES",
     "build_context",
     "export_pdf",
+    "remove_pdf",
     "generate_document",
     "markdown_to_story",
     "next_version",
