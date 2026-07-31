@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 from datetime import datetime
 from app.models.user import SubscriptionTier
@@ -7,16 +7,38 @@ from app.models.user import SubscriptionTier
 MIN_PASSWORD_LENGTH = 8
 
 
+def normalise_email(value: str) -> str:
+    """Fold an address to the single form the account is stored under.
+
+    ``users.email`` is unique but case-sensitive, so without this
+    ``Ada@example.com`` and ``ada@example.com`` become two separate accounts
+    and neither can be signed into with the other's casing.
+    """
+    return value.strip().lower()
+
+
 class UserCreate(BaseModel):
+    # Deliberately no ``str_strip_whitespace``: the password must be stored
+    # exactly as the user typed it, spaces included.
     email: EmailStr
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=128)
     full_name: Optional[str] = Field(default=None, max_length=255)
     company_name: Optional[str] = Field(default=None, max_length=255)
 
+    @field_validator("email", mode="after")
+    @classmethod
+    def _fold_email(cls, value: str) -> str:
+        return normalise_email(value)
+
 
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+
+    @field_validator("email", mode="after")
+    @classmethod
+    def _fold_email(cls, value: str) -> str:
+        return normalise_email(value)
 
 
 class UserResponse(BaseModel):
